@@ -1,4 +1,4 @@
-```markdown
+
 # GitAutoSync v6
 *Autonomous bidirectional folder ⇆ Git(Hub/Enterprise) synchroniser for Windows*  
 Released **2025‑04‑17** &nbsp;•&nbsp; Licence [MIT](#licence)
@@ -219,4 +219,4 @@ Any HTTPS Git remote works (GitHub, GHES, Bitbucket, Azure Repos, Gitea…).
 
 ## Licence
 Released under the **MIT Licence** — see `LICENSE` file for details.
-```
+
