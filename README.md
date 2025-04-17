@@ -1,5 +1,5 @@
 
-# GitAutoSync v6
+# GitAutoSync
 *Autonomous bidirectional folder ⇆ Git(Hub/Enterprise) synchroniser for Windows*  
 Released **2025‑04‑17** &nbsp;•&nbsp; Licence [MIT](#licence)
 
