@@ -417,7 +417,7 @@ SCHTASKS /Create /SC ONLOGON /TN GitAutoSync ^
 
 ```cmd
 nssm install GitAutoSync "powershell.exe" ^
-  "-ExecutionPolicy","Bypass","-File","C:\Tools\GitAutoSync_Enterprise_vNext.ps1","-Repo","https://github.com/acme/repo.git","-Root","D:\Sync","-Branch","main","-Profile","Workstation","-ConflictPolicy","HostPriority","-HostPriority","100"
+  "-ExecutionPolicy","Bypass","-File","C:\Tools\GitAutoSync.ps1","-Repo","https://github.com/acme/repo.git","-Root","D:\Sync","-Branch","main","-Profile","Workstation","-ConflictPolicy","HostPriority","-HostPriority","100"
 nssm start GitAutoSync
 ```
 
