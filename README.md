@@ -114,7 +114,7 @@ $root = "D:\Sync"
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass `
-  -File C:\Tools\GitAutoSync_Enterprise_vNext.ps1 `
+  -File C:\Tools\GitAutoSync.ps1 `
   -Repo "https://github.com/your-org/your-repo.git" `
   -Root $root `
   -Branch "main" `
@@ -160,7 +160,7 @@ This ensures deterministic conflict resolution when the same file is edited on b
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass `
-  -File "C:\Tools\GitAutoSync_Enterprise_vNext.ps1" `
+  -File "C:\Tools\GitAutoSync.ps1" `
   -Repo "https://github.com/your-org/your-repo.git" `
   -Root "C:\Projects\MyProject" `
   -Branch "main" `
@@ -176,7 +176,7 @@ powershell.exe -ExecutionPolicy Bypass `
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass `
-  -File "C:\Tools\GitAutoSync_Enterprise_vNext.ps1" `
+  -File "C:\Tools\GitAutoSync.ps1" `
   -Repo "https://github.com/your-org/your-repo.git" `
   -Root "D:\Work\MyProject" `
   -Branch "main" `
@@ -403,14 +403,14 @@ powershell.exe
 Arguments:
 
 ```text
--WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Tools\GitAutoSync_Enterprise_vNext.ps1" -Repo "https://github.com/acme/repo.git" -Root "D:\Sync" -Branch "main" -Profile Workstation -ConflictPolicy HostPriority -HostPriority 100
+-WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Tools\GitAutoSync.ps1" -Repo "https://github.com/acme/repo.git" -Root "D:\Sync" -Branch "main" -Profile Workstation -ConflictPolicy HostPriority -HostPriority 100
 ```
 
 ### SCHTASKS
 
 ```cmd
 SCHTASKS /Create /SC ONLOGON /TN GitAutoSync ^
- /TR "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Tools\GitAutoSync_Enterprise_vNext.ps1 -Repo https://github.com/acme/repo.git -Root D:\Sync -Branch main -Profile Workstation -ConflictPolicy HostPriority -HostPriority 100"
+ /TR "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Tools\GitAutoSync.ps1 -Repo https://github.com/acme/repo.git -Root D:\Sync -Branch main -Profile Workstation -ConflictPolicy HostPriority -HostPriority 100"
 ```
 
 ### NSSM
