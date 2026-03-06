@@ -1,222 +1,575 @@
 
 # GitAutoSync
-*Autonomous bidirectional folder ⇆ Git(Hub/Enterprise) synchroniser for Windows*  
-Released **2025‑04‑17** &nbsp;•&nbsp; Licence [MIT](#licence)
+*Autonomous bidirectional folder ⇆ Git(Hub/Enterprise) synchronizer for Windows*  
+Released **2026-03-16** • License [MIT](#license)
 
-> Effortlessly mirrors every change between a local directory and any HTTPS Git
-> remote. Handles installation, conflicts, logging, encryption, auditing — and
-> keeps running as a background service.
+> Continuously mirrors changes between a local directory and a Git remote, with real-time file watching, periodic scans, persisted state, queue-based processing, conflict policies, integrity checks, structured logging, quarantine, and unattended recovery. Designed for Windows workstations, servers, Task Scheduler, NSSM, or WinSW.
 
 ---
 
-## Table of Contents
-1. [Key Features](#key-features)  
-2. [System Requirements](#system-requirements)  
-3. [Quick‑Start (under 60 s)](#quick-start-under-60-s)  
-4. [Command‑Line Reference](#command-line-reference)  
-5. [Unattended Conflict Resolution Policies](#unattended-conflict-resolution-policies)  
-6. [How It Works](#how-it-works)  
-7. [Installation & Scheduling](#installation--scheduling)  
-8. [Advanced Scenarios](#advanced-scenarios)  
-9. [Troubleshooting](#troubleshooting)  
-10. [Security & Compliance Notes](#security--compliance-notes)  
-11. [FAQ](#faq)  
-12. [Licence](#licence)
+## Table of Contents
+1. [Key Features](#key-features)  
+2. [System Requirements](#system-requirements)  
+3. [Synchronization Model](#synchronization-model)  
+4. [Quick Start](#quick-start)  
+5. [Two-PC Setup](#two-pc-setup)  
+6. [Command-Line Reference](#command-line-reference)  
+7. [Conflict Resolution Policies](#conflict-resolution-policies)  
+8. [How It Works](#how-it-works)  
+9. [Control Commands](#control-commands)  
+10. [Installation and Scheduling](#installation-and-scheduling)  
+11. [Advanced Scenarios](#advanced-scenarios)  
+12. [Status, Logs, and Metrics](#status-logs-and-metrics)  
+13. [Troubleshooting](#troubleshooting)  
+14. [Security and Compliance Notes](#security-and-compliance-notes)  
+15. [FAQ](#faq)  
+16. [License](#license)
 
 ---
 
-## Key Features
-| | |
+## Key Features
+
+| Area | Description |
 |---|---|
-| **Self‑contained** | Detects `git.exe`; if absent, silently installs **Git for Windows** via **winget** (user scope). |
-| **Trusted single service** | Global mutex prevents duplicate instances. |
-| **Smart first run** | Empty folder → auto‑clone.<br>Non‑repo folder → `git init`, add remote, fetch, checkout.<br>Existing repo → re‑use. |
-| **Continuous loop** | Adds **all** changes (`add ‑A` + `add .`), commits, pushes, then fetches & pulls when the remote is ahead. |
-| **Autostash safe‑pull** | Uses `git pull --rebase --autostash` – local edits never block the loop. |
-| **Automatic conflict solver** | Configurable `‑ConflictPolicy` (LocalWins • RemoteWins • NewestCommit • NewestMTime • HostPriority). |
-| **Observability** | Rotating transcripts `<ProgramData>\GitAutoSync\Logs`, Windows **Event Log**, CSV metrics. |
-| **Security toggles** | EFS encryption (`‑Encrypt`), compliance guard (Signed‑off‑by, no empty commit), dry‑run mode. |
-| **Proxy & portable friendly** | Inherits global Git proxy; accepts any custom `git.exe` path. |
+| **Real-time sync engine** | Uses `FileSystemWatcher` for near-real-time detection of file create, modify, delete, and rename events. |
+| **Periodic safety scan** | Performs full recursive scans at intervals to recover from missed events, watcher overflow, or external changes. |
+| **Persistent local state** | Maintains a JSON state database with tracked files, hashes, timestamps, last seen cycle, conflicts, quarantine records, and HEAD metadata. |
+| **Transactional queue** | Uses a persisted operation queue for staged processing of local adds, modifications, deletes, renames, scans, and sync cycles. |
+| **Smart first run** | Empty folder → auto-clone. Non-repo folder → `git init`, add remote, fetch, checkout. Existing repo → reuse. |
+| **Single-instance safety** | Global mutex prevents duplicate instances on the same machine. |
+| **Conflict handling** | Supports unattended conflict resolution policies: `LocalWins`, `RemoteWins`, `NewestCommit`, `NewestMTime`, `HostPriority`, `ManualFreeze`. |
+| **Rename detection** | Detects rename and move operations using scan-time hash matching between deleted and added files. |
+| **Dangerous delete protection** | If deletions exceed a threshold, sync enters safe pause and can move affected files to quarantine instead of blindly propagating destruction. |
+| **Integrity verification** | Verifies local and remote HEAD state and records integrity check timestamps. |
+| **Repository health checks** | Detects broken repo state, missing remotes, lock files, branch issues, and can attempt controlled repair. |
+| **Auto-recovery** | Can retry, repair, or optionally re-clone in severe corruption scenarios. |
+| **Observability** | Structured JSON logs, CSV metrics, status JSON, transaction journal, conflict resolution audit file, optional Windows Event Log. |
+| **Security controls** | Remote allowlist, optional EFS encryption, secret scan before staging, log redaction, compliance metadata, credential-friendly design. |
+| **Large file awareness** | Warns on oversized files and supports Git LFS-friendly workflows. |
+| **Profile support** | Includes `Workstation`, `Server`, `ReadOnly`, `Mirror`, `LocalPriority`, and `RemotePriority` profiles. |
+| **Control inbox** | Pause, resume, force sync, status refresh, and stop through simple JSON control files. |
+| **Dry-run mode** | Simulates actions without modifying the working tree or remote. |
 
 ---
 
-## System Requirements
+## System Requirements
+
 | Component | Minimum |
 |---|---|
-| **OS** | Windows 10/11 with PowerShell 5+. |
-| **Git remote** | PAT with *repo → contents read/write* stored by Git Credential Manager **or** embedded in remote URL. |
-| **Network** | HTTPS access to GitHub/ GHES / Bitbucket / Azure Repos. |
-| **Optional** | `winget` for auto‑installation (bundled with modern Windows). |
+| **OS** | Windows 10/11 with PowerShell 5+ |
+| **Git** | Git for Windows, installed or auto-installed via `winget` |
+| **Remote** | HTTPS Git remote supported by GitHub, GitHub Enterprise, GitLab, Azure Repos, Bitbucket, Gitea, or similar |
+| **Authentication** | Working Git credentials on every machine that runs the synchronizer |
+| **Optional** | `winget` for automatic Git installation |
+| **Optional** | Git Credential Manager for secure token storage |
+| **Optional** | Git LFS for large file workflows |
 
 ---
 
-## Quick‑Start (under 60 s)
+## Synchronization Model
+
+GitAutoSync is not just a loop that runs `git add`, `pull`, and `push`. It is an eventually-consistent or near-real-time Windows synchronizer built on top of Git.
+
+### Core semantics
+- One local root folder is mapped to one Git remote branch.
+- Local file system events are captured and normalized into queued operations.
+- The queue is persisted to disk for crash recovery.
+- Periodic scans correct watcher drift and detect renames.
+- Local staged changes are integrated with remote changes using `pull --rebase --autostash`.
+- Conflicts are resolved by policy when possible.
+- Integrity checks validate convergence after sync cycles.
+
+### Supported modes
+- `EventuallyConsistent`
+- `NearRealtime`
+- `MirrorReplica`
+
+### Supported directions
+- `Bidirectional`
+- `PushOnly`
+- `PullOnly`
+
+---
+
+## Quick Start
+
+### 1. Ensure Git authentication works
+On each machine, verify:
 
 ```powershell
-# 1 · Store your PAT once
-git credential-manager-core store
-  protocol=https
-  host=github.com
-  username=token
-  password=ghp_yourTokenHere
+git ls-remote https://github.com/your-org/your-repo.git
+````
 
-# 2 · Choose the folder to sync
+Then verify that `git pull` and `git push` work normally in a test repo.
+
+### 2. Choose a local folder
+
+Example:
+
+```powershell
 $root = "D:\Sync"
-
-# 3 · Run GitAutoSync
-powershell -ExecutionPolicy Bypass `
-  -File C:\GitAutoSync.ps1 `
-  -Root  $root `
-  -Repo  "https://github.com/your‑org/your‑repo.git" `
-  -Verbose
 ```
 
-Within 15 s every file in **D:\Sync** is pushed to GitHub; remote commits flow
-back automatically.
+### 3. Run GitAutoSync
 
----
-
-## Command‑Line Reference
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `‑Repo` | `$Env:GITHUB_REPO` | Remote HTTPS URL (`.git` optional). Required on first run when folder isn’t already a repo. |
-| `‑Root` | `%USERPROFILE%\Bridge` | Local directory to mirror (auto‑created). |
-| `‑Branch` | `main` | Branch to track. |
-| `‑DelaySec` | `15` | Loop interval (seconds). |
-| `‑GitExe` | auto | Custom path to *git.exe* (portable version, network share…). |
-| `‑InstallGitIfMissing` | **true** | Use **winget** to install Git if not found. Disable with `‑InstallGitIfMissing:$false`. |
-| `‑Verbose` | off | Colour logs for each push/pull. |
-| `‑DryRun` | off | Simulate, no modifications. |
-| `‑Encrypt` | off | Enable EFS encryption on `‑Root`. |
-| `‑ComplianceMode` | off | Set `user.name/email`; add Signed‑off‑by; block empty commits. |
-| `‑RetryMax` | `5` | Max retries for each Git command. |
-| `‑ConflictPolicy` | `LocalWins` | Conflict strategy (see below). |
-| `‑HostPriority` | `0` | Integer priority for *HostPriority* policy. |
-| `‑LogDir` | ProgramData path | Transcript directory. |
-| `‑MetricCsv` | `metrics.csv` | CSV metrics file. |
-| `‑EventLog` | **true** | Log errors to Windows Event Log. |
-
----
-
-## Unattended Conflict Resolution Policies
-
-| Policy | Rule when same line edited both sides |
-|---|---|
-| `LocalWins` (default) | Keep local version (ours). |
-| `RemoteWins` | Keep remote version (theirs). |
-| `NewestCommit` | Compare Git commit timestamp; keep newer commit. |
-| `NewestMTime` | Compare filesystem last‑write time; keep newer file. |
-| `HostPriority` | Higher `‑HostPriority` value wins (ties favour remote). |
-
-If auto‑resolution fails (rare binary conflict), the loop pauses; manual
-resolution then `git rebase --continue` resumes normal operation.
-
----
-
-## How It Works
-
-```
-add -A + add .     ➜  stage *everything*
-pull --rebase --autostash
-└─ if exit ≠ 0  ➜ auto‑resolve conflicts  ➜ rebase --continue
-commit   "AutoSync <timestamp>"
-push
-fetch + ahead? ➜ pull --rebase --autostash (with auto‑resolve if needed)
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File C:\Tools\GitAutoSync_Enterprise_vNext.ps1 `
+  -Repo "https://github.com/your-org/your-repo.git" `
+  -Root $root `
+  -Branch "main" `
+  -Profile Workstation `
+  -ConflictPolicy HostPriority `
+  -HostPriority 100 `
+  -VerboseMode
 ```
 
-*Autostash* avoids “unstaged changes” errors; retries with exponential back‑off
-handle flaky networks.
+On first run:
+
+* empty folder → clone
+* non-repo folder with files → initialize repo, attach remote, fetch, checkout
+* existing repo → reuse it
 
 ---
 
-## Installation & Scheduling
+## Two-PC Setup
 
-<details>
-<summary><strong>Task Scheduler (GUI)</strong></summary>
+This is the correct setup when the same project must stay synchronized across two Windows machines.
 
-1. **Create Task** → run with highest privileges (optional).  
-2. Trigger : **At log‑on** (or **On startup** for a service).  
-3. Action :
+### Requirements
+
+Both PCs must use:
+
+* the **same remote repository**
+* the **same branch**
+* a **valid Git authentication setup**
+* a **coherent conflict policy**
+
+### Recommended policy
+
+Use `HostPriority` with different priorities per machine.
+
+Example:
+
+* primary workstation: `-HostPriority 100`
+* secondary workstation: `-HostPriority 50`
+
+This ensures deterministic conflict resolution when the same file is edited on both machines around the same time.
+
+### PC 1
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File "C:\Tools\GitAutoSync_Enterprise_vNext.ps1" `
+  -Repo "https://github.com/your-org/your-repo.git" `
+  -Root "C:\Projects\MyProject" `
+  -Branch "main" `
+  -Profile Workstation `
+  -ConflictPolicy HostPriority `
+  -HostPriority 100 `
+  -DelaySec 10 `
+  -FullScanIntervalSec 300 `
+  -VerboseMode
+```
+
+### PC 2
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass `
+  -File "C:\Tools\GitAutoSync_Enterprise_vNext.ps1" `
+  -Repo "https://github.com/your-org/your-repo.git" `
+  -Root "D:\Work\MyProject" `
+  -Branch "main" `
+  -Profile Workstation `
+  -ConflictPolicy HostPriority `
+  -HostPriority 50 `
+  -DelaySec 10 `
+  -FullScanIntervalSec 300 `
+  -VerboseMode
+```
+
+### Startup order
+
+If the remote repository is empty and PC 1 already contains the project files:
+
+1. Start GitAutoSync on **PC 1** first
+2. Wait for the first successful push
+3. Start GitAutoSync on **PC 2**
+
+If the remote repository already contains the source of truth:
+
+* start both normally
+
+### Do not do this
+
+* Do not use different branches unless that is intentional
+* Do not use conflicting policies like `LocalWins` on one machine and `RemoteWins` on the other
+* Do not run two synchronizer instances against the same root on the same machine
+* Do not assume authentication is configured just because the script starts
+
+---
+
+## Command-Line Reference
+
+| Parameter                       | Default                | Description                                                                                               |
+| ------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `-Repo`                         | `$env:GITHUB_REPO`     | Remote repository URL. Required on first initialization if the folder is not already connected to a repo. |
+| `-Root`                         | `%USERPROFILE%\Bridge` | Local root folder to synchronize.                                                                         |
+| `-Branch`                       | `main`                 | Branch to track.                                                                                          |
+| `-Profile`                      | `Workstation`          | Sync profile: `Workstation`, `Server`, `ReadOnly`, `Mirror`, `LocalPriority`, `RemotePriority`.           |
+| `-DelaySec`                     | `15`                   | Main loop interval in seconds.                                                                            |
+| `-FullScanIntervalSec`          | `300`                  | Full scan interval used as watcher fallback and reconciliation pass.                                      |
+| `-DebounceMs`                   | `1500`                 | Event debounce window for burst changes.                                                                  |
+| `-GitExe`                       | auto                   | Explicit path to `git.exe`.                                                                               |
+| `-InstallGitIfMissing`          | `true`                 | Auto-install Git with `winget` if missing.                                                                |
+| `-VerboseMode`                  | off                    | Console diagnostics.                                                                                      |
+| `-DryRun`                       | off                    | Simulate without making changes.                                                                          |
+| `-Encrypt`                      | off                    | Enable EFS encryption on the root directory.                                                              |
+| `-ComplianceMode`               | off                    | Configure `user.name`, `user.email`, and commit hygiene metadata.                                         |
+| `-ReadOnlyMode`                 | off                    | Prevent pushing local changes.                                                                            |
+| `-EnableWatcher`                | on                     | Enable `FileSystemWatcher`.                                                                               |
+| `-EnableControlInbox`           | on                     | Enable local JSON control commands.                                                                       |
+| `-EnableEventLog`               | on                     | Write selected messages to Windows Event Log.                                                             |
+| `-EnableStructuredJsonLog`      | on                     | Write structured JSON logs.                                                                               |
+| `-EnablePeriodicIntegrityCheck` | on                     | Perform HEAD and sync integrity checks.                                                                   |
+| `-EnableSecretScan`             | on                     | Scan files for possible secrets before staging.                                                           |
+| `-AllowAutoRepair`              | on                     | Allow controlled repo repair attempts.                                                                    |
+| `-AllowAutoReclone`             | off                    | Allow destructive backup-and-reclone recovery path.                                                       |
+| `-RetryMax`                     | `5`                    | Maximum Git command retry attempts.                                                                       |
+| `-RetryBaseSeconds`             | `2`                    | Retry backoff base.                                                                                       |
+| `-BatchWindowSec`               | `8`                    | Commit batching window.                                                                                   |
+| `-NetworkFailurePauseSec`       | `60`                   | Pause after network failure.                                                                              |
+| `-DangerousDeleteThreshold`     | `50`                   | Number of deletions that triggers safe pause/quarantine protection.                                       |
+| `-LargeFileThresholdMB`         | `50`                   | Large file warning threshold.                                                                             |
+| `-MaxFilesPerCycle`             | `5000`                 | Maximum files inspected per scan cycle.                                                                   |
+| `-MaxQueueItems`                | `50000`                | Maximum persisted queued operations.                                                                      |
+| `-HealthCheckEveryCycles`       | `20`                   | Repository health check cadence.                                                                          |
+| `-ConflictPolicy`               | `LocalWins`            | Conflict strategy.                                                                                        |
+| `-HostPriority`                 | `0`                    | Host priority used with `HostPriority` policy.                                                            |
+| `-SyncModel`                    | `EventuallyConsistent` | Synchronization behavior model.                                                                           |
+| `-SyncDirection`                | `Bidirectional`        | Push/pull behavior.                                                                                       |
+| `-RemoteAllowList`              | common Git hosts       | Allowed remote hosts.                                                                                     |
+| `-IgnoreGlobs`                  | built-in list          | Exclusion patterns.                                                                                       |
+| `-IncludeGlobs`                 | `*`                    | Inclusion patterns.                                                                                       |
+| `-ProtectedDeletePaths`         | `.git\*`               | Paths never deleted by destructive propagation logic.                                                     |
+| `-SecretRegexes`                | built-in patterns      | Secret detection regexes.                                                                                 |
+| `-StateDir`                     | ProgramData path       | State storage root.                                                                                       |
+| `-LogDir`                       | ProgramData path       | Log directory.                                                                                            |
+| `-MetricCsv`                    | ProgramData path       | CSV metrics file.                                                                                         |
+| `-StateFile`                    | ProgramData path       | Persisted sync state.                                                                                     |
+| `-QueueFile`                    | ProgramData path       | Persisted operation queue.                                                                                |
+| `-StatusFile`                   | ProgramData path       | Status snapshot file.                                                                                     |
+| `-ResolutionAuditFile`          | ProgramData path       | Conflict resolution audit journal.                                                                        |
+| `-TransactionLogFile`           | ProgramData path       | Operation transaction log.                                                                                |
+| `-StructuredLogFile`            | ProgramData path       | Structured JSON log file.                                                                                 |
+| `-QuarantineDir`                | ProgramData path       | Quarantine location for dangerous or protected files.                                                     |
+| `-ControlInboxDir`              | ProgramData path       | Directory for control commands.                                                                           |
+| `-SnapshotDir`                  | ProgramData path       | Periodic local snapshots.                                                                                 |
+
+---
+
+## Conflict Resolution Policies
+
+| Policy         | Behavior                                                                  |
+| -------------- | ------------------------------------------------------------------------- |
+| `LocalWins`    | Keeps local content (`ours`) during Git conflict resolution.              |
+| `RemoteWins`   | Keeps remote content (`theirs`).                                          |
+| `NewestCommit` | Compares commit timestamps and keeps the newer side.                      |
+| `NewestMTime`  | Compares filesystem last-write time and keeps the newer side.             |
+| `HostPriority` | Uses the higher `-HostPriority` value.                                    |
+| `ManualFreeze` | Records the conflict and pauses automatic resolution for manual handling. |
+
+### Conflict classes recognized by the engine
+
+* `add_add`
+* `modify_modify`
+* `delete_modify`
+* `modify_delete`
+* Git unmerged conflicts detected during rebase/pull
+
+### Recommended for multi-machine use
+
+`HostPriority`
+
+Example:
+
+* desktop: `100`
+* laptop: `50`
+* server mirror: `200`
+
+---
+
+## How It Works
+
+### High-level pipeline
 
 ```text
-Program/script : powershell.exe
-Arguments      : -WindowStyle Hidden -ExecutionPolicy Bypass `
-                 -File "C:\GitAutoSync.ps1" `
-                 -Root "D:\Sync" `
-                 -Repo "https://github.com/acme/repo.git" `
-                 -ConflictPolicy HostPriority -HostPriority 50
+FileSystemWatcher events
+        ↓
+Debounce and deduplicate
+        ↓
+Persist queued operations
+        ↓
+Periodic full scan fallback
+        ↓
+Stage local changes
+        ↓
+fetch origin <branch>
+        ↓
+pull --rebase --autostash
+        ↓
+auto-resolve conflicts if policy allows
+        ↓
+commit local batch
+        ↓
+push origin <branch>
+        ↓
+integrity check
+        ↓
+status/log/metrics update
 ```
-</details>
 
-<details>
-<summary><strong>SCHTASKS CLI</strong></summary>
+### First-run behavior
+
+* **Empty folder**: clone
+* **Non-repo folder with files**: initialize repo, add remote, fetch, create or track branch
+* **Existing repo**: reuse it
+
+### Safety mechanisms
+
+* global mutex
+* persisted queue and state
+* health checks
+* repair attempts
+* delete threshold protection
+* quarantine
+* redacted structured logging
+* control inbox for pause/resume/stop
+
+---
+
+## Control Commands
+
+If control inbox is enabled, GitAutoSync watches:
+
+```text
+C:\ProgramData\GitAutoSync\control
+```
+
+Drop a JSON file ending with `.cmd.json`.
+
+### Pause
+
+```json
+{ "command": "pause" }
+```
+
+### Resume
+
+```json
+{ "command": "resume" }
+```
+
+### Force sync
+
+```json
+{ "command": "force-sync" }
+```
+
+### Refresh status
+
+```json
+{ "command": "status" }
+```
+
+### Stop
+
+```json
+{ "command": "stop" }
+```
+
+---
+
+## Installation and Scheduling
+
+### Task Scheduler
+
+Program:
+
+```text
+powershell.exe
+```
+
+Arguments:
+
+```text
+-WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Tools\GitAutoSync_Enterprise_vNext.ps1" -Repo "https://github.com/acme/repo.git" -Root "D:\Sync" -Branch "main" -Profile Workstation -ConflictPolicy HostPriority -HostPriority 100
+```
+
+### SCHTASKS
 
 ```cmd
 SCHTASKS /Create /SC ONLOGON /TN GitAutoSync ^
- /TR "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\GitAutoSync.ps1 -Root D:\Sync -Repo https://github.com/acme/repo.git"
+ /TR "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Tools\GitAutoSync_Enterprise_vNext.ps1 -Repo https://github.com/acme/repo.git -Root D:\Sync -Branch main -Profile Workstation -ConflictPolicy HostPriority -HostPriority 100"
 ```
-</details>
 
-<details>
-<summary><strong>Run as Windows service (nssm)</strong></summary>
+### NSSM
 
 ```cmd
 nssm install GitAutoSync "powershell.exe" ^
-  "-ExecutionPolicy","Bypass","-File","C:\GitAutoSync.ps1","-Root","D:\Sync"
+  "-ExecutionPolicy","Bypass","-File","C:\Tools\GitAutoSync_Enterprise_vNext.ps1","-Repo","https://github.com/acme/repo.git","-Root","D:\Sync","-Branch","main","-Profile","Workstation","-ConflictPolicy","HostPriority","-HostPriority","100"
 nssm start GitAutoSync
 ```
-</details>
+
+### WinSW
+
+Use `powershell.exe` as the executable and pass the same arguments through the WinSW XML configuration.
 
 ---
 
-## Advanced Scenarios
+## Advanced Scenarios
 
-| Need | How |
-|------|-----|
-| Portable Git on USB | `‑GitExe "E:\PortableGit\cmd\git.exe"` |
-| Corporate proxy | `git config --global http.proxy http://proxy:8080` |
-| Shallow clone for huge repo | Pre‑clone with `--depth 1 --filter=blob:none`, then run script. |
-| Kiosk: remote overwrites edits | `‑ConflictPolicy RemoteWins` |
-| Priority matrix | Server `‑HostPriority 100`, laptops 10; use `HostPriority` policy. |
-| Dry run validation | `‑DryRun -Verbose` |
-| Metrics to Prometheus | Point node‑exporter textfile collector to `metrics.csv`. |
+| Need                                   | How                                                                                    |
+| -------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Portable Git**                       | `-GitExe "E:\PortableGit\cmd\git.exe"`                                                 |
+| **Corporate proxy**                    | Configure Git globally, for example `git config --global http.proxy http://proxy:8080` |
+| **Read-only mirror**                   | `-Profile ReadOnly -SyncDirection PullOnly`                                            |
+| **Server mirror**                      | `-Profile Mirror -ConflictPolicy HostPriority -HostPriority 200`                       |
+| **Primary workstation wins conflicts** | `-ConflictPolicy HostPriority -HostPriority 100`                                       |
+| **Secondary workstation yields**       | `-ConflictPolicy HostPriority -HostPriority 50`                                        |
+| **Remote should always win**           | `-ConflictPolicy RemoteWins`                                                           |
+| **Dry validation**                     | `-DryRun -VerboseMode`                                                                 |
+| **Aggressive detection**               | lower `-DelaySec`, keep watcher enabled                                                |
+| **Huge repo**                          | pre-clone shallow if appropriate, raise scan interval, tune exclusions                 |
+| **Large binaries**                     | install Git LFS and track relevant extensions before using the synchronizer            |
+| **Compliance/audit mode**              | `-ComplianceMode -EnableStructuredJsonLog -EnableEventLog`                             |
+
+---
+
+## Status, Logs, and Metrics
+
+Default files under:
+
+```text
+C:\ProgramData\GitAutoSync
+```
+
+### Important files
+
+| File                     | Purpose                             |
+| ------------------------ | ----------------------------------- |
+| `status.json`            | Current runtime state               |
+| `state.json`             | Persistent synchronization state    |
+| `queue.json`             | Persistent operation queue          |
+| `metrics.csv`            | Metrics suitable for parsing/export |
+| `transactions.jsonl`     | Operation transaction log           |
+| `resolution-audit.jsonl` | Conflict resolution audit trail     |
+| `Logs\structured.jsonl`  | Structured logs                     |
+| `Quarantine\`            | Safeguarded files                   |
+| `snapshots\`             | Periodic snapshots                  |
+
+### Read current status
+
+```powershell
+Get-Content "C:\ProgramData\GitAutoSync\status.json" -Raw
+```
+
+### Example checks
+
+* last cycle time
+* queue length
+* current and remote HEAD
+* pending conflicts
+* last push/pull timestamps
+* current runtime state
 
 ---
 
 ## Troubleshooting
 
-| Issue | Cause | Fix |
-|---|---|---|
-| Git asks for credentials each loop | PAT not stored | Re‑run `git credential-manager-core store`. |
-| “unstaged changes” pull error | File locked by AV | Ensure autostash (default) ; check AV exclusions. |
-| `fatal: not a git repository` | Previous clone failed | Delete folder or rerun with correct parameters. |
-| winget blocked | Policy prohibits | Manually install Git; set `‑GitExe`; disable auto‑install. |
-| High CPU on huge repo | Delay too low | Increase `‑DelaySec` or use shallow clone. |
+| Issue                                  | Cause                                                       | Fix                                                                                  |
+| -------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Git prompts for credentials repeatedly | Authentication not configured properly                      | Configure Git Credential Manager or another valid Git auth mechanism on that machine |
+| Remote access fails                    | Network, proxy, PAT, or remote URL problem                  | Test with `git ls-remote`, then `git pull` and `git push` manually                   |
+| Watcher misses changes                 | Event overflow or burst activity                            | Full scan fallback will recover; tune `-FullScanIntervalSec` and exclusions          |
+| Sync pauses after many deletions       | Dangerous delete threshold triggered                        | Inspect state, quarantine, and logs before resuming                                  |
+| Conflicts keep recurring               | Two machines are editing the same files at the same time    | Use `HostPriority`, separate roles, or reduce concurrent editing                     |
+| `fatal: not a git repository`          | Folder initialization failed or `.git` is damaged           | Re-run initialization, inspect logs, or allow controlled recovery                    |
+| Repo lock files remain                 | Previous crash or interrupted Git operation                 | Health check/repair may clear lock files; inspect `.git\*.lock` if needed            |
+| Large files slow down sync             | Git not optimized for large binary churn                    | Use Git LFS and adjust thresholds/exclusions                                         |
+| Secret scan blocks commits             | File content matches secret detection patterns              | Remove the secret, change patterns carefully, or exclude the file                    |
+| High CPU or disk usage                 | Too many files, too-frequent scans, insufficient exclusions | Increase `-DelaySec`, tune `-IgnoreGlobs`, reduce scan pressure                      |
 
 ---
 
-## Security & Compliance Notes
-* **Credentials** stored by Git Credential Manager → encrypted in Windows vault.
-* `‑Encrypt` turns on EFS so only the account/service can read files at rest.
-* `‑ComplianceMode` enforces corporate commit hygiene.
-* Logs + Event‑Log provide audit trail.
+## Security and Compliance Notes
+
+* Git credentials are not provisioned automatically. Every machine must already be able to authenticate to the remote.
+* `-Encrypt` enables EFS on the root folder.
+* Secret scan prevents obvious leaks from being staged automatically.
+* Structured logs redact matching secret patterns.
+* Remote allowlist prevents accidental synchronization to untrusted hosts.
+* Compliance mode configures author metadata and improves audit traceability.
+* Conflict resolution decisions are written to an audit journal.
+* Transaction and status files provide a verifiable operational trace.
 
 ---
 
 ## FAQ
 
-**Can multiple PCs run GitAutoSync on the same repo ?**  
-Yes. Each instance re‑bases and pushes; conflicts settle via your chosen policy.
+### Can multiple PCs run GitAutoSync on the same repo?
 
-**How to pause sync ?**  
-Stop/disable the Task Scheduler task or service; restart to resume.
+Yes. That is a supported scenario. Use the same remote and branch, valid Git credentials on every machine, and a deterministic conflict policy such as `HostPriority`.
 
-**Other Git servers ?**  
-Any HTTPS Git remote works (GitHub, GHES, Bitbucket, Azure Repos, Gitea…).
+### What is the recommended setup for two PCs?
+
+Use `HostPriority`, for example:
+
+* main workstation: `100`
+* secondary workstation: `50`
+
+Start the machine that already contains the authoritative local project first if the remote is empty.
+
+### How do I pause synchronization?
+
+Create a JSON control file with:
+
+```json
+{ "command": "pause" }
+```
+
+### How do I resume?
+
+Create:
+
+```json
+{ "command": "resume" }
+```
+
+### How do I stop the service cleanly?
+
+Create:
+
+```json
+{ "command": "stop" }
+```
+
+Or stop the scheduled task, NSSM service, WinSW service, or PowerShell process.
+
+### Can it run as a background service?
+
+Yes. It is designed for Task Scheduler, NSSM, WinSW, or long-running PowerShell sessions.
+
+### Does it support GitHub Enterprise or other Git servers?
+
+Yes, any compatible HTTPS Git remote can work, subject to authentication and remote allowlist policy.
+
+### Is it a full replacement for a distributed file system?
+
+No. It is a Git-based synchronizer with queueing, conflict policies, integrity checks, and recovery controls. It is best suited to Git-friendly project trees.
 
 ---
 
-## Licence
-Released under the **MIT Licence** — see `LICENSE` file for details.
+## License
 
+Released under the **MIT License**. See `LICENSE` for details.
